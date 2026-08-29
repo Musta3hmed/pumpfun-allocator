@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Block Trade Allocator</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --ink: #e6e9ef;
+    --dim: #8b93a3; --accent: #5b9dff; --ok: #3ecf8e; --bad: #ff6b6b; --warn: #f5a623;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    padding: 20px 28px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+  .meta { color: var(--dim); font-size: 12px; font-family: var(--mono); }
+  main { display: grid; grid-template-columns: minmax(340px, 420px) 1fr; gap: 20px; padding: 20px 28px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  section + section { margin-top: 20px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 14px; font-weight: 600; }
+  label { display: block; font-size: 12px; color: var(--dim); margin: 12px 0 5px; }
+  input, select, textarea {
+    width: 100%; background: #0d0f14; border: 1px solid var(--line); border-radius: 6px;
+    color: var(--ink); padding: 8px 10px; font-size: 13px; font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  button {
+    border: 1px solid var(--line); background: #212632; color: var(--ink);
+    border-radius: 6px; padding: 9px 14px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06182f; font-weight: 600; }
+  button.danger { background: #3a1f22; border-color: #5a2a2e; color: #ffb4b4; }
+  .actions { display: flex; gap: 10px; margin-top: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 500; color: var(--dim); font-size: 11px;
+       text-transform: uppercase; letter-spacing: .06em; padding: 0 8px 8px; }
+  td { padding: 9px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .key { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .num { text-align: right; font-family: var(--mono); }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; border: 1px solid var(--line); }
+  .pill.on { color: var(--ok); border-color: #1f4a38; }
+  .pill.off { color: var(--dim); }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  .note { color: var(--dim); font-size: 12px; margin: 10px 0 0; }
+  .empty { color: var(--dim); font-size: 13px; padding: 10px 0; }
+  .reason { color: var(--dim); font-size: 11px; }
+  dialog {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 22px; max-width: 460px; width: 92vw;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  .banner {
+    border: 1px solid #3d3520; background: #241f12; color: #e8d9b0;
+    border-radius: 8px; padding: 11px 14px; font-size: 12.5px; margin: 0 28px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Block Trade Allocator</h1>
+  <span class="meta" id="cfg">loading…</span>
+</header>
+
+<p class="banner">
+  Every order placed here spends other people's money and is written to the audit ledger
+  against their name and agreement reference. Preview the allocation before you execute.
+</p>
+
+<main>
+  <div>
+    <section>
+      <h2>Block trade</h2>
+      <label>Side</label>
+      <select id="side">
+        <option value="buy">Buy</option>
+        <option value="sell">Sell</option>
+      </select>
+
+      <label>Token mint address</label>
+      <input id="mint" class="mono" placeholder="pump.fun mint address" spellcheck="false" />
+
+      <div id="buyFields">
+        <label>Sizing basis</label>
+        <select id="basis">
+          <option value="pro-rata">Pro-rata — size scales with each client's capital</option>
+          <option value="equal">Equal — same notional for every client</option>
+        </select>
+        <div class="row">
+          <div><label>Min SOL / account</label><input id="minSol" type="number" step="0.001" value="0.05" /></div>
+          <div><label>Max SOL / account</label><input id="maxSol" type="number" step="0.001" value="0.25" /></div>
+        </div>
+      </div>
+
+      <div id="sellFields" hidden>
+        <label>Percent of each client's position to sell</label>
+        <input id="sellPct" type="number" min="1" max="100" step="1" value="100" />
+      </div>
+
+      <div class="row">
+        <div><label>Slippage %</label><input id="slippage" type="number" step="0.1" value="5" /></div>
+        <div><label>Priority fee (SOL)</label><input id="priorityFee" type="number" step="0.00001" value="0.00005" /></div>
+      </div>
+
+      <label>Note for the ledger (optional)</label>
+      <input id="note" placeholder="rationale for this trade" />
+
+      <div class="actions">
+        <button id="previewBtn">Preview allocation</button>
+        <button id="executeBtn" class="primary" disabled>Execute</button>
+      </div>
+      <p class="note" id="status"></p>
+    </section>
+
+    <section>
+      <h2>Managed accounts</h2>
+      <div id="accounts"><p class="empty">loading…</p></div>
+      <p class="note">
+        Accounts are added with <code class="mono">npm run wallet -- add</code> so client
+        secret keys are never typed into this page.
+      </p>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Proposed allocation</h2>
+      <div id="plan"><p class="empty">Preview a block trade to see how it splits across clients.</p></div>
+    </section>
+
+    <section>
+      <h2>Ledger</h2>
+      <div id="history"><p class="empty">No trades recorded yet.</p></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="passDialog">
+  <h2 style="margin-bottom:12px">Confirm execution</h2>
+  <p id="confirmSummary" style="font-size:13px;margin:0 0 14px"></p>
+  <label>Keystore passphrase</label>
+  <input id="passInput" type="password" autocomplete="off" />
+  <div class="actions">
+    <button id="passCancel">Cancel</button>
+    <button id="passGo" class="primary">Sign and submit</button>
+  </div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n, dp = 4) => (n === null || n === undefined ? '—' : Number(n).toFixed(dp));
+let lastPlan = null;
+let cfg = {};
+
+async function api(path, options) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  const body = await res.json();
+  if (!body.ok) throw new Error(body.error || `request failed (${res.status})`);
+  return body;
+}
+
+function setStatus(msg, cls = '') {
+  $('status').className = 'note ' + cls;
+  $('status').textContent = msg;
+}
+
+function tradeParams() {
+  const side = $('side').value;
+  return {
+    side,
+    mint: $('mint').value.trim(),
+    basis: $('basis').value,
+    minSol: Number($('minSol').value),
+    maxSol: Number($('maxSol').value),
+    sellPct: Number($('sellPct').value),
+    slippagePct: Number($('slippage').value),
+    priorityFee: Number($('priorityFee').value),
+    note: $('note').value.trim(),
+  };
+}
+
+$('side').addEventListener('change', () => {
+  const sell = $('side').value === 'sell';
+  $('buyFields').hidden = sell;
+  $('sellFields').hidden = !sell;
+  lastPlan = null;
+  $('executeBtn').disabled = true;
+});
+
+['mint', 'minSol', 'maxSol', 'sellPct', 'basis'].forEach((id) =>
+  $(id).addEventListener('input', () => {
+    lastPlan = null;
+    $('executeBtn').disabled = true;
+  })
+);
+
+async function loadConfig() {
+  const { rpcUrl, maxBlockTradeSol, maxConcurrency } = await api('/api/config');
+  cfg = { rpcUrl, maxBlockTradeSol, maxConcurrency };
+  $('cfg').textContent = `${rpcUrl} · ceiling ${maxBlockTradeSol} SOL · ${maxConcurrency} concurrent`;
+}
+
+async function loadAccounts() {
+  const { accounts } = await api('/api/accounts');
+  if (!accounts.length) {
+    $('accounts').innerHTML = '<p class="empty">No accounts in the keystore.</p>';
+    return;
+  }
+  const rows = accounts.map((a) => `
+    <tr>
+      <td>
+        <div>${escape(a.label)}</div>
+        <div class="key">${escape(a.pubkey)}</div>
+        <div class="reason">${escape(a.mandate.clientName)} · ${escape(a.mandate.agreementRef)} · cap ${a.mandate.maxPerTradeSol} SOL</div>
+      </td>
+      <td class="num">${a.balanceError ? '<span class="bad">rpc err</span>' : fmt(a.solBalance)}</td>
+      <td><span class="pill ${a.enabled ? 'on' : 'off'}">${a.enabled ? 'active' : 'paused'}</span></td>
+      <td><button data-toggle="${a.id}" data-next="${!a.enabled}">${a.enabled ? 'Pause' : 'Resume'}</button></td>
+    </tr>`).join('');
+  $('accounts').innerHTML =
+    `<table><thead><tr><th>Client</th><th class="num">SOL</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+
+  $('accounts').querySelectorAll('[data-toggle]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      await api(`/api/accounts/${btn.dataset.toggle}/enabled`, {
+        method: 'POST',
+        body: JSON.stringify({ enabled: btn.dataset.next === 'true' }),
+      });
+      lastPlan = null;
+      $('executeBtn').disabled = true;
+      loadAccounts();
+    })
+  );
+}
+
+function renderPlan(plan) {
+  const orders = plan.orders.map((o) => `
+    <tr>
+      <td>
+        <div>${escape(o.label)}</div>
+        <div class="reason">${escape(o.reason)}</div>
+      </td>
+      <td class="num">${fmt(o.amount, 6)}<div class="reason">${escape(o.amountUnit)}</div></td>
+    </tr>`).join('');
+
+  const skipped = plan.skipped.map((s) => `
+    <tr>
+      <td><div>${escape(s.label)}</div><div class="reason">${escape(s.reason)}</div></td>
+      <td class="num warn">skipped</td>
+    </tr>`).join('');
+
+  const total = plan.side === 'buy'
+    ? `<p class="note">Total deployed: <strong>${fmt(plan.totalSol, 6)} SOL</strong> across ${plan.orders.length} client${plan.orders.length === 1 ? '' : 's'}.</p>`
+    : `<p class="note">Selling across ${plan.orders.length} client position${plan.orders.length === 1 ? '' : 's'}.</p>`;
+
+  $('plan').innerHTML = orders || skipped
+    ? `<table><thead><tr><th>Client</th><th class="num">Allocation</th></tr></thead><tbody>${orders}${skipped}</tbody></table>${total}`
+    : '<p class="empty">No account can take this trade.</p>';
+}
+
+function renderHistory(trades) {
+  if (!trades.length) {
+    $('history').innerHTML = '<p class="empty">No trades recorded yet.</p>';
+    return;
+  }
+  $('history').innerHTML = trades.map((t) => {
+    const legs = t.legs.map((l) => `
+      <tr>
+        <td>${escape(l.label)}<div class="reason">${escape(l.client_name)}</div></td>
+        <td class="num">${fmt(l.amount, 6)} <span class="reason">${escape(l.amount_unit)}</span></td>
+        <td class="${l.status === 'confirmed' ? 'ok' : l.status === 'failed' ? 'bad' : 'warn'}">${escape(l.status)}</td>
+        <td class="key">${l.signature
+          ? `<a href="https://solscan.io/tx/${encodeURIComponent(l.signature)}" target="_blank" rel="noopener" style="color:var(--accent)">${escape(l.signature.slice(0, 10))}…</a>`
+          : escape((l.error || '').slice(0, 60))}</td>
+      </tr>`).join('');
+    return `
+      <div style="margin-bottom:18px">
+        <div class="mono" style="font-size:12px;margin-bottom:6px">
+          ${new Date(t.created_at).toLocaleString()} · <strong>${escape(t.side)}</strong> ·
+          ${escape(t.mint.slice(0, 12))}… · ${escape(t.basis)}${t.note ? ' · ' + escape(t.note) : ''}
+        </div>
+        <table><tbody>${legs}</tbody></table>
+      </div>`;
+  }).join('');
+}
+
+$('previewBtn').addEventListener('click', async () => {
+  const p = tradeParams();
+  if (!p.mint) return setStatus('Enter a mint address first.', 'bad');
+  setStatus('Reading live balances…');
+  try {
+    const { plan } = await api('/api/plan', { method: 'POST', body: JSON.stringify(p) });
+    lastPlan = plan;
+    renderPlan(plan);
+    $('executeBtn').disabled = plan.orders.length === 0;
+    setStatus(`${plan.orders.length} order(s) planned, ${plan.skipped.length} skipped.`, 'ok');
+  } catch (e) {
+    lastPlan = null;
+    $('executeBtn').disabled = true;
+    setStatus(e.message, 'bad');
+  }
+});
+
+$('executeBtn').addEventListener('click', () => {
+  if (!lastPlan) return;
+  const p = tradeParams();
+  $('confirmSummary').textContent = p.side === 'buy'
+    ? `Deploy ${fmt(lastPlan.totalSol, 6)} SOL across ${lastPlan.orders.length} client account(s). Balances are re-read at execution time.`
+    : `Sell ${p.sellPct}% of the position held by ${lastPlan.orders.length} client account(s).`;
+  $('passInput').value = '';
+  $('passDialog').showModal();
+});
+
+$('passCancel').addEventListener('click', () => $('passDialog').close());
+
+$('passGo').addEventListener('click', async () => {
+  const passphrase = $('passInput').value;
+  $('passDialog').close();
+  setStatus('Signing and submitting…');
+  $('executeBtn').disabled = true;
+  try {
+    const { result } = await api('/api/execute', {
+      method: 'POST',
+      body: JSON.stringify({ ...tradeParams(), passphrase, confirm: true }),
+    });
+    setStatus(`${result.confirmed} confirmed, ${result.failed} failed, ${result.skipped.length} skipped.`,
+      result.failed ? 'warn' : 'ok');
+    lastPlan = null;
+    await Promise.all([loadAccounts(), refreshHistory()]);
+  } catch (e) {
+    setStatus(e.message, 'bad');
+  }
+});
+
+async function refreshHistory() {
+  const { trades } = await api('/api/history');
+  renderHistory(trades);
+}
+
+function escape(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+loadConfig().catch((e) => ($('cfg').textContent = e.message));
+loadAccounts().catch((e) => ($('accounts').innerHTML = `<p class="empty bad">${escape(e.message)}</p>`));
+refreshHistory().catch(() => {});
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "pumpfun-allocator",
+  "version": "0.1.0",
+  "description": "Managed-account block trade allocator for pump.fun / PumpSwap",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "wallet": "node src/cli-wallet.js",
+    "test": "node --test test.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.3",
+    "bs58": "^6.0.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
