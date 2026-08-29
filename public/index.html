@@ -235,11 +235,29 @@ const fmt = (n, dp = 4) => (n === null || n === undefined ? '—' : Number(n).to
 let lastPlan = null;
 let cfg = {};
 
-async function api(path, options) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+/**
+ * Every call is bounded. A fetch that never settles would otherwise leave a panel
+ * saying "loading" indefinitely, which tells the operator nothing — and on a page
+ * that moves client money, a UI that silently stops updating is worse than one
+ * that admits it is stuck.
+ */
+async function api(path, options = {}, timeoutMs = 20000) {
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+      ...options,
+    });
+  } catch (e) {
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') {
+      throw new Error(
+        `no response from the allocator server after ${timeoutMs / 1000}s. ` +
+        'Is it still running, and is anything (VPN, proxy, or an extension) intercepting localhost?'
+      );
+    }
+    throw new Error(`cannot reach the allocator server (${e.message}). Is it running?`);
+  }
   const body = await res.json();
   if (!body.ok) throw new Error(body.error || `request failed (${res.status})`);
   return body;
@@ -801,7 +819,10 @@ function escape(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-loadConfig().catch((e) => ($('cfg').textContent = e.message));
+loadConfig().catch((e) => {
+  $('cfg').textContent = e.message;
+  $('cfg').className = 'meta bad';
+});
 loadAccounts().catch((e) => ($('accounts').innerHTML = `<p class="empty bad">${escape(e.message)}</p>`));
 refreshHistory().catch(() => {});
 </script>

@@ -34,7 +34,13 @@ const pct = (n) => {
 };
 
 async function api(path, ms = 6000) {
-  const res = await fetch(BASE + path, { signal: AbortSignal.timeout(ms) });
+  let res;
+  try {
+    res = await fetch(BASE + path, { signal: AbortSignal.timeout(ms) });
+  } catch (e) {
+    const stalled = e.name === 'TimeoutError' || e.name === 'AbortError';
+    throw new Error(stalled ? `no response after ${ms / 1000}s` : `cannot reach server (${e.message})`);
+  }
   const body = await res.json();
   if (!body.ok) throw new Error(body.error || `request failed (${res.status})`);
   return body;
