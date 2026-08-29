@@ -20,14 +20,37 @@ and every fill is written to a per-client audit ledger.
 - **Ledger** — append-only SQLite. What was decided, what each client got and why,
   what filled, what it cost.
 
-## Setup
+## Install
 
-```bash
-cd pumpfun-allocator && npm install
+Download **[install.ps1](https://raw.githubusercontent.com/Musta3hmed/pumpfun-allocator/main/install.ps1)**,
+then run it from PowerShell:
+
+```powershell
+.\install.ps1
 ```
 
-Copy `.env.example` to `.env` and set at minimum `RPC_URL` (use a private RPC — the
-public endpoint will drop fills) and `MAX_BLOCK_TRADE_SOL`.
+That fetches the repo into `%USERPROFILE%\pumpfun-allocator`, installs dependencies,
+creates your `.env`, and runs the test suite. Re-running it updates an existing
+install in place and leaves your `.env`, keystore, and ledger untouched.
+
+Options: `-Path D:	rading` to install elsewhere, `-Start` to launch the dashboard
+when it finishes, `-SkipTests` to skip verification.
+
+Requires Node.js 24 or newer (the ledger uses the built-in `node:sqlite` module).
+
+<details>
+<summary>Manual install</summary>
+
+```bash
+git clone https://github.com/Musta3hmed/pumpfun-allocator.git
+cd pumpfun-allocator && npm ci && cp .env.example .env
+```
+</details>
+
+## Setup
+
+Set at minimum `RPC_URL` in `.env` (use a private RPC — the public endpoint will
+drop fills) and `MAX_BLOCK_TRADE_SOL`.
 
 Add a client account:
 
