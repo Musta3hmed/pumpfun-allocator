@@ -1,11 +1,13 @@
 import path from 'node:path';
 import express from 'express';
 import { config } from './config.js';
+import crypto from 'node:crypto';
 import {
-  listAccounts, addAccount, setEnabled, removeAccount, verifyPassphrase,
+  listAccounts, addAccount, addExternalAccount, setEnabled, removeAccount, verifyPassphrase,
 } from './keystore.js';
 import { planBlockTrade } from './allocator.js';
-import { executePlan } from './executor.js';
+import { executePlan, settlePhantomLeg } from './executor.js';
+import { getTokenMarket, getCandles, TIMEFRAMES } from './market.js';
 import { recentBlockTrades, legsForAccount } from './ledger.js';
 import { solBalance } from './pumpfun.js';
 
@@ -37,6 +39,73 @@ app.get('/api/config', (_req, res) =>
     passphraseInEnv: Boolean(config.passphrase),
   })
 );
+
+/** Display-only market data for the mint preview card. */
+app.get('/api/token/:mint', wrap(async (req, res) => {
+  const mint = String(req.params.mint || '').trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
+    return fail(res, 400, 'that does not look like a Solana mint address');
+  }
+  ok(res, { token: await getTokenMarket(mint) });
+}));
+
+/** OHLCV candles for the preview chart, drawn client-side. */
+app.get('/api/token/:pair/candles', wrap(async (req, res) => {
+  const tf = String(req.query.tf || '1h');
+  if (!TIMEFRAMES[tf]) {
+    return fail(res, 400, `unknown timeframe (want one of ${Object.keys(TIMEFRAMES).join(', ')})`);
+  }
+  ok(res, { candles: await getCandles(String(req.params.pair), tf) });
+}));
+
+/**
+ * Issue a one-time challenge for a wallet to sign.
+ *
+ * The nonce is what stops a captured signature from being replayed later to
+ * register the same wallet somewhere else; it is single-use and short-lived.
+ */
+const nonces = new Map();
+const NONCE_TTL_MS = 5 * 60 * 1000;
+
+function pruneNonces() {
+  const now = Date.now();
+  for (const [k, v] of nonces) if (now - v > NONCE_TTL_MS) nonces.delete(k);
+}
+
+app.post('/api/wallet/nonce', wrap(async (_req, res) => {
+  pruneNonces();
+  const nonce = crypto.randomBytes(16).toString('hex');
+  nonces.set(nonce, Date.now());
+  const message = [
+    'Link this wallet to the pump.fun block trade allocator.',
+    'This proves you control the wallet. It authorizes no transfer and moves no funds.',
+    `Nonce: ${nonce}`,
+  ].join('\n');
+  ok(res, { message, nonce });
+}));
+
+/** Register a Phantom-connected or watch-only account. No secret key involved. */
+app.post('/api/accounts/external', wrap(async (req, res) => {
+  const { label, pubkey, custody, mandate, message, signature, nonce } = req.body || {};
+
+  pruneNonces();
+  if (!nonce || !nonces.has(nonce)) {
+    return fail(res, 400, 'challenge expired or unknown — reconnect the wallet and try again');
+  }
+  if (typeof message !== 'string' || !message.includes(nonce)) {
+    return fail(res, 400, 'the signed message does not carry the issued challenge');
+  }
+  nonces.delete(nonce); // single use
+
+  const account = addExternalAccount({ label, pubkey, custody, mandate, message, signature });
+  ok(res, { account });
+}));
+
+/** Record the result of a leg the browser signed with Phantom. */
+app.post('/api/legs/:id/settle', wrap(async (req, res) => {
+  const { signature, error } = req.body || {};
+  ok(res, { leg: await settlePhantomLeg(req.params.id, { signature, error }) });
+}));
 
 app.get('/api/accounts', wrap(async (_req, res) => {
   const accounts = await Promise.all(
@@ -88,16 +157,21 @@ app.post('/api/execute', wrap(async (req, res) => {
 
   if (confirm !== true) return fail(res, 400, 'execute requires an explicit confirm: true');
 
-  const pass = passphrase || config.passphrase;
-  if (!pass) return fail(res, 400, 'keystore passphrase is required');
-  if (!verifyPassphrase(pass)) return fail(res, 401, 'keystore passphrase is incorrect');
-
   // Re-plan against live balances rather than trusting a plan the client posted back.
   const plan = await planBlockTrade({
     side, mint, basis, minSol, maxSol, sellPct,
     accounts: listAccounts(),
   });
   if (plan.orders.length === 0) return fail(res, 400, 'plan produced no executable orders');
+
+  // Only legs this machine signs for need the keystore passphrase. An all-Phantom
+  // block trade is approved in the browser and needs no passphrase at all.
+  const pass = passphrase || config.passphrase;
+  const needsKeystore = plan.orders.some((o) => o.custody !== 'phantom');
+  if (needsKeystore) {
+    if (!pass) return fail(res, 400, 'keystore passphrase is required to sign for keystore accounts');
+    if (!verifyPassphrase(pass)) return fail(res, 401, 'keystore passphrase is incorrect');
+  }
 
   const result = await executePlan(
     { ...plan, minSol, maxSol, sellPct },

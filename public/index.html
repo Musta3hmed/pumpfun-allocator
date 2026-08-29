@@ -61,6 +61,28 @@
     border-radius: 10px; padding: 22px; max-width: 460px; width: 92vw;
   }
   dialog::backdrop { background: rgba(0,0,0,.6); }
+  .tok { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; margin-bottom: 14px; }
+  .tok img { width: 40px; height: 40px; border-radius: 8px; background: #0d0f14; object-fit: cover; }
+  .tok .sym { font-size: 16px; font-weight: 600; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat { background: #0d0f14; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+  .stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+  .stat .v { font-family: var(--mono); font-size: 15px; margin-top: 3px; }
+  .chart { border: 1px solid var(--line); border-radius: 8px; background: #0d0f14; padding: 6px 6px 2px; }
+  .chart svg { display: block; }
+  .chartfoot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+               font-family: var(--mono); font-size: 10.5px; color: var(--dim); padding: 2px 4px 4px; }
+  .tfrow { display: flex; gap: 6px; margin-bottom: 8px; }
+  button.tf { padding: 3px 10px; font-size: 11px; font-family: var(--mono); }
+  button.tf.on { border-color: var(--accent); color: var(--accent); }
+  .stage { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 20px;
+           border: 1px solid var(--line); color: var(--dim); }
+  .stage.curve { color: var(--warn); border-color: #4a3a1a; }
+  .wallet { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .custody { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); }
+  .custody.keystore { color: var(--accent); border-color: #23405f; }
+  .custody.phantom  { color: #ab9ff2; border-color: #453a6b; }
+  .custody.watch    { color: var(--dim); }
   .banner {
     border: 1px solid #3d3520; background: #241f12; color: #e8d9b0;
     border-radius: 8px; padding: 11px 14px; font-size: 12.5px; margin: 0 28px;
@@ -125,15 +147,29 @@
 
     <section>
       <h2>Managed accounts</h2>
+      <div class="wallet">
+        <button id="connectBtn">Connect Phantom</button>
+        <select id="connectAs" style="width:auto">
+          <option value="phantom">Signs in browser</option>
+          <option value="watch">Watch only</option>
+        </select>
+      </div>
       <div id="accounts"><p class="empty">loading…</p></div>
       <p class="note">
-        Accounts are added with <code class="mono">npm run wallet -- add</code> so client
-        secret keys are never typed into this page.
+        <strong>Connect Phantom</strong> links a wallet by public key only — no secret key
+        touches this machine, and its leg needs an approval per trade.
+        <code class="mono">npm run wallet -- add</code> stores an encrypted key locally so the
+        server can sign unattended. Either way, secret keys are never typed into this page.
       </p>
     </section>
   </div>
 
   <div>
+    <section id="tokenCard" hidden>
+      <h2>Token</h2>
+      <div id="tokenBody"></div>
+    </section>
+
     <section>
       <h2>Proposed allocation</h2>
       <div id="plan"><p class="empty">Preview a block trade to see how it splits across clients.</p></div>
@@ -146,9 +182,45 @@
   </div>
 </main>
 
+<dialog id="linkDialog">
+  <h2 style="margin-bottom:12px">Link wallet</h2>
+  <p id="linkPubkey" class="key" style="margin:0 0 12px"></p>
+  <label>Label</label>
+  <input id="linkLabel" placeholder="e.g. Dana R — growth" />
+  <div id="linkMandate">
+    <label>Client legal name</label>
+    <input id="linkClient" />
+    <div class="row">
+      <div><label>Agreement reference</label><input id="linkAgreement" /></div>
+      <div><label>Signed date</label><input id="linkSigned" type="date" /></div>
+    </div>
+    <label>Max SOL per trade this client authorized</label>
+    <input id="linkCap" type="number" step="0.01" value="0.25" />
+  </div>
+  <p class="note" id="linkNote"></p>
+  <div class="actions">
+    <button id="linkCancel">Cancel</button>
+    <button id="linkGo" class="primary">Sign and link</button>
+  </div>
+</dialog>
+
+<dialog id="approveDialog">
+  <h2 style="margin-bottom:12px">Phantom approvals needed</h2>
+  <p style="font-size:13px;margin:0 0 14px">
+    These legs have no key on this machine. Phantom will ask you to approve each one.
+  </p>
+  <div id="approveList" class="mono" style="font-size:12px"></div>
+  <p class="note" id="approveStatus"></p>
+  <div class="actions">
+    <button id="approveCancel">Stop</button>
+    <button id="approveGo" class="primary">Approve next</button>
+  </div>
+</dialog>
+
 <dialog id="passDialog">
   <h2 style="margin-bottom:12px">Confirm execution</h2>
   <p id="confirmSummary" style="font-size:13px;margin:0 0 14px"></p>
+  <p class="note" id="passHint" style="margin-top:0"></p>
   <label>Keystore passphrase</label>
   <input id="passInput" type="password" autocomplete="off" />
   <div class="actions">
@@ -225,7 +297,10 @@ async function loadAccounts() {
       <td>
         <div>${escape(a.label)}</div>
         <div class="key">${escape(a.pubkey)}</div>
-        <div class="reason">${escape(a.mandate.clientName)} · ${escape(a.mandate.agreementRef)} · cap ${a.mandate.maxPerTradeSol} SOL</div>
+        <div class="reason">
+          <span class="custody ${escape(a.custody)}">${escape(a.custody)}</span>
+          ${escape(a.mandate.clientName)} · ${escape(a.mandate.agreementRef)}${a.custody === 'watch' ? '' : ` · cap ${a.mandate.maxPerTradeSol} SOL`}
+        </div>
       </td>
       <td class="num">${a.balanceError ? '<span class="bad">rpc err</span>' : fmt(a.solBalance)}</td>
       <td><span class="pill ${a.enabled ? 'on' : 'off'}">${a.enabled ? 'active' : 'paused'}</span></td>
@@ -251,7 +326,7 @@ function renderPlan(plan) {
   const orders = plan.orders.map((o) => `
     <tr>
       <td>
-        <div>${escape(o.label)}</div>
+        <div>${escape(o.label)} <span class="custody ${escape(o.custody)}">${escape(o.custody)}</span></div>
         <div class="reason">${escape(o.reason)}</div>
       </td>
       <td class="num">${fmt(o.amount, 6)}<div class="reason">${escape(o.amountUnit)}</div></td>
@@ -307,7 +382,12 @@ $('previewBtn').addEventListener('click', async () => {
     lastPlan = plan;
     renderPlan(plan);
     $('executeBtn').disabled = plan.orders.length === 0;
-    setStatus(`${plan.orders.length} order(s) planned, ${plan.skipped.length} skipped.`, 'ok');
+    const ph = plan.phantomLegs || 0;
+    setStatus(
+      `${plan.orders.length} order(s) planned, ${plan.skipped.length} skipped.` +
+      (ph ? ` ${ph} need${ph === 1 ? 's' : ''} a Phantom approval.` : ''),
+      'ok'
+    );
   } catch (e) {
     lastPlan = null;
     $('executeBtn').disabled = true;
@@ -322,6 +402,10 @@ $('executeBtn').addEventListener('click', () => {
     ? `Deploy ${fmt(lastPlan.totalSol, 6)} SOL across ${lastPlan.orders.length} client account(s). Balances are re-read at execution time.`
     : `Sell ${p.sellPct}% of the position held by ${lastPlan.orders.length} client account(s).`;
   $('passInput').value = '';
+  const serverLegs = lastPlan.orders.filter((o) => o.custody !== 'phantom').length;
+  $('passHint').textContent = serverLegs
+    ? `${serverLegs} leg(s) are signed on this machine and need the keystore passphrase.`
+    : 'Every leg is signed in Phantom, so no keystore passphrase is needed. Leave this blank.';
   $('passDialog').showModal();
 });
 
@@ -337,14 +421,342 @@ $('passGo').addEventListener('click', async () => {
       method: 'POST',
       body: JSON.stringify({ ...tradeParams(), passphrase, confirm: true }),
     });
-    setStatus(`${result.confirmed} confirmed, ${result.failed} failed, ${result.skipped.length} skipped.`,
-      result.failed ? 'warn' : 'ok');
+    const waiting = result.awaitingApproval || [];
+    setStatus(
+      `${result.confirmed} confirmed, ${result.failed} failed, ${result.skipped.length} skipped.` +
+      (waiting.length ? ` ${waiting.length} awaiting Phantom approval.` : ''),
+      result.failed ? 'warn' : 'ok'
+    );
     lastPlan = null;
     await Promise.all([loadAccounts(), refreshHistory()]);
+    if (waiting.length) {
+      approvalQueue = waiting.map((l) => ({ ...l, done: false }));
+      renderApprovals();
+      $('approveStatus').textContent = '';
+      $('approveDialog').showModal();
+    }
   } catch (e) {
     setStatus(e.message, 'bad');
   }
 });
+
+/* ---------------- token preview ---------------- */
+
+const money = (n) => {
+  if (n === null || n === undefined) return '—';
+  const a = Math.abs(n);
+  if (a >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+  return '$' + n.toFixed(a < 1 ? 6 : 2);
+};
+const pct = (n) => {
+  if (n === null || n === undefined) return '<span class="reason">—</span>';
+  const cls = n > 0 ? 'ok' : n < 0 ? 'bad' : '';
+  return `<span class="${cls}">${n > 0 ? '+' : ''}${n.toFixed(2)}%</span>`;
+};
+
+let tokenTimer = null;
+let lastMintLoaded = null;
+
+function renderToken(t) {
+  $('tokenCard').hidden = false;
+  if (!t.found) {
+    chartPair = null;
+    $('tokenBody').innerHTML = `<p class="empty warn">${escape(t.message)}</p>`;
+    return;
+  }
+  $('tokenBody').innerHTML = `
+    <div class="tok">
+      ${t.imageUrl ? `<img src="${escape(t.imageUrl)}" alt="" onerror="this.remove()" />` : '<div></div>'}
+      <div>
+        <div class="sym">${escape(t.symbol || '?')} <span class="reason">${escape(t.name || '')}</span></div>
+        <span class="stage ${t.graduated ? '' : 'curve'}">${escape(t.stage)}</span>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Market cap</div><div class="v">${money(t.marketCap)}</div></div>
+      <div class="stat"><div class="k">Price</div><div class="v">${t.priceUsd === null ? '—' : '$' + t.priceUsd.toPrecision(4)}</div></div>
+      <div class="stat"><div class="k">Liquidity</div><div class="v">${money(t.liquidityUsd)}</div></div>
+      <div class="stat"><div class="k">24h volume</div><div class="v">${money(t.volume24h)}</div></div>
+      <div class="stat"><div class="k">1h</div><div class="v">${pct(t.change1h)}</div></div>
+      <div class="stat"><div class="k">24h</div><div class="v">${pct(t.change24h)}</div></div>
+    </div>
+    <div class="tfrow" id="tfRow"></div>
+    <div class="chart" id="chartBox"></div>
+    <p class="note">
+      ${t.buys24h !== null ? `${t.buys24h} buys / ${t.sells24h} sells in 24h · ` : ''}
+      ${t.pairCount} pair${t.pairCount === 1 ? '' : 's'} ·
+      <a href="${escape(t.pairUrl)}" target="_blank" rel="noopener" style="color:var(--accent)">open on DexScreener</a>
+    </p>`;
+
+  chartPair = t.pairAddress;
+  renderTfButtons();
+  loadChart();
+}
+
+async function loadToken(mint) {
+  if (!mint || mint === lastMintLoaded) return;
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) { $('tokenCard').hidden = true; return; }
+  lastMintLoaded = mint;
+  $('tokenCard').hidden = false;
+  $('tokenBody').innerHTML = '<p class="empty">loading market data…</p>';
+  try {
+    const { token } = await api(`/api/token/${encodeURIComponent(mint)}`);
+    if (mint === lastMintLoaded) renderToken(token);
+  } catch (e) {
+    if (mint === lastMintLoaded) $('tokenBody').innerHTML = `<p class="empty bad">${escape(e.message)}</p>`;
+  }
+}
+
+$('mint').addEventListener('input', () => {
+  clearTimeout(tokenTimer);
+  const mint = $('mint').value.trim();
+  tokenTimer = setTimeout(() => loadToken(mint), 400);
+});
+
+/* ---------------- phantom ---------------- */
+
+function phantom() {
+  const p = (window.phantom && window.phantom.solana) ||
+            (window.solana && window.solana.isPhantom ? window.solana : null);
+  if (!p) throw new Error('Phantom was not detected. Install it from phantom.app, then reload this page.');
+  return p;
+}
+
+/* Minimal base58 encoder — Phantom hands back raw signature bytes. */
+function bs58encode(bytes) {
+  const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const digits = [0];
+  for (const byte of bytes) {
+    let carry = byte;
+    for (let i = 0; i < digits.length; i++) {
+      carry += digits[i] << 8;
+      digits[i] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    while (carry > 0) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+  }
+  let out = '';
+  for (const b of bytes) { if (b === 0) out += A[0]; else break; }
+  for (let i = digits.length - 1; i >= 0; i--) out += A[digits[i]];
+  return out;
+}
+
+let pendingLink = null;
+
+$('connectBtn').addEventListener('click', async () => {
+  try {
+    const custody = $('connectAs').value;
+    const provider = phantom();
+    const { publicKey } = await provider.connect();
+    const pubkey = publicKey.toString();
+
+    const { message, nonce } = await api('/api/wallet/nonce', { method: 'POST', body: '{}' });
+    const signed = await provider.signMessage(new TextEncoder().encode(message), 'utf8');
+
+    pendingLink = { pubkey, custody, message, nonce, signature: bs58encode(signed.signature) };
+    $('linkPubkey').textContent = pubkey;
+    $('linkLabel').value = '';
+    $('linkMandate').hidden = custody === 'watch';
+    $('linkNote').textContent = custody === 'watch'
+      ? 'Watch-only: balances and positions are tracked. This account is never traded.'
+      : 'This wallet joins block trades, but Phantom asks you to approve its leg on every trade.';
+    $('linkDialog').showModal();
+  } catch (e) {
+    setStatus(e.message, 'bad');
+  }
+});
+
+$('linkCancel').addEventListener('click', () => $('linkDialog').close());
+
+$('linkGo').addEventListener('click', async () => {
+  if (!pendingLink) return;
+  const watch = pendingLink.custody === 'watch';
+  const body = {
+    ...pendingLink,
+    label: $('linkLabel').value.trim() || pendingLink.pubkey.slice(0, 8),
+    mandate: {
+      clientName: watch ? ($('linkClient').value.trim() || 'watch-only') : $('linkClient').value.trim(),
+      agreementRef: watch ? ($('linkAgreement').value.trim() || 'n/a - watch only') : $('linkAgreement').value.trim(),
+      signedAt: watch ? ($('linkSigned').value || new Date().toISOString().slice(0, 10)) : $('linkSigned').value,
+      maxPerTradeSol: watch ? 0 : Number($('linkCap').value),
+    },
+  };
+  try {
+    await api('/api/accounts/external', { method: 'POST', body: JSON.stringify(body) });
+    $('linkDialog').close();
+    pendingLink = null;
+    setStatus('wallet linked', 'ok');
+    loadAccounts();
+  } catch (e) {
+    $('linkNote').innerHTML = `<span class="bad">${escape(e.message)}</span>`;
+  }
+});
+
+/* ---------------- phantom approvals ---------------- */
+
+let approvalQueue = [];
+
+function renderApprovals() {
+  const nextIndex = approvalQueue.findIndex((x) => !x.done);
+  $('approveList').innerHTML = approvalQueue.map((l, i) => {
+    let state;
+    if (l.done) {
+      state = l.ok ? '<span class="ok">confirmed</span>'
+                   : `<span class="bad">${escape(l.err || 'failed')}</span>`;
+    } else {
+      state = i === nextIndex ? '<span class="warn">next</span>' : 'queued';
+    }
+    return `<div style="padding:5px 0;border-top:1px solid var(--line)">
+      ${escape(l.label)} — ${l.amount} ${escape(l.amountUnit)} · ${state}</div>`;
+  }).join('');
+  const remaining = approvalQueue.filter((l) => !l.done).length;
+  $('approveGo').disabled = remaining === 0;
+  $('approveGo').textContent = remaining === 0 ? 'Done' : `Approve next (${remaining} left)`;
+  $('approveCancel').textContent = remaining === 0 ? 'Close' : 'Stop';
+}
+
+$('approveCancel').addEventListener('click', async () => {
+  for (const leg of approvalQueue.filter((l) => !l.done)) {
+    await api(`/api/legs/${leg.legId}/settle`, {
+      method: 'POST',
+      body: JSON.stringify({ error: 'not approved - operator stopped the run' }),
+    }).catch(() => {});
+  }
+  approvalQueue = [];
+  $('approveDialog').close();
+  refreshHistory();
+});
+
+$('approveGo').addEventListener('click', async () => {
+  const leg = approvalQueue.find((l) => !l.done);
+  if (!leg) { $('approveDialog').close(); refreshHistory(); return; }
+
+  $('approveStatus').textContent = `Waiting for Phantom to approve ${leg.label}...`;
+  try {
+    const provider = phantom();
+    const raw = Uint8Array.from(atob(leg.txBase64), (c) => c.charCodeAt(0));
+    const { signature } = await provider.signAndSendTransaction(raw);
+    const { leg: settled } = await api(`/api/legs/${leg.legId}/settle`, {
+      method: 'POST',
+      body: JSON.stringify({ signature }),
+    });
+    leg.done = true;
+    leg.ok = settled.status === 'confirmed';
+    leg.err = settled.error;
+  } catch (e) {
+    leg.done = true;
+    leg.ok = false;
+    leg.err = e.message;
+    await api(`/api/legs/${leg.legId}/settle`, {
+      method: 'POST',
+      body: JSON.stringify({ error: e.message }),
+    }).catch(() => {});
+  }
+  $('approveStatus').textContent = '';
+  renderApprovals();
+  refreshHistory();
+});
+
+/* ---------------- candlestick chart ---------------- */
+
+let chartTf = '1h';
+let chartPair = null;
+
+/** Nicely-scaled price label: these tokens span 1e-9 to 1e3. */
+function priceLabel(v) {
+  if (v === 0) return '0';
+  const a = Math.abs(v);
+  if (a >= 1) return v.toFixed(2);
+  if (a >= 0.0001) return v.toFixed(6);
+  return v.toExponential(2);
+}
+
+function renderChart(data) {
+  const box = $('chartBox');
+  const candles = data.candles || [];
+
+  if (candles.length === 0) {
+    box.innerHTML = '<p class="empty">No candles for this pair yet.</p>';
+    return;
+  }
+
+  const W = 620, H = 260, padL = 8, padR = 62, padT = 10, padB = 20;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const lo = Math.min(...candles.map((c) => c.l));
+  const hi = Math.max(...candles.map((c) => c.h));
+  const span = hi - lo || hi || 1;
+  const y = (v) => padT + plotH - ((v - lo) / span) * plotH;
+
+  const slot = plotW / candles.length;
+  const bodyW = Math.max(1.5, slot * 0.62);
+
+  const bars = candles.map((c, i) => {
+    const cx = padL + slot * (i + 0.5);
+    const up = c.c >= c.o;
+    const col = up ? 'var(--ok)' : 'var(--bad)';
+    const yO = y(c.o), yC = y(c.c);
+    const top = Math.min(yO, yC);
+    const h = Math.max(1, Math.abs(yC - yO));
+    return `<line x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${y(c.h).toFixed(1)}" y2="${y(c.l).toFixed(1)}"
+                  stroke="${col}" stroke-width="1" opacity=".65" />
+            <rect x="${(cx - bodyW / 2).toFixed(1)}" y="${top.toFixed(1)}"
+                  width="${bodyW.toFixed(1)}" height="${h.toFixed(1)}" fill="${col}" />`;
+  }).join('');
+
+  // Four horizontal guides with price labels down the right edge.
+  const guides = [0, 0.25, 0.5, 0.75, 1].map((f) => {
+    const v = lo + span * f;
+    const gy = y(v);
+    return `<line x1="${padL}" x2="${padL + plotW}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}"
+                  stroke="var(--line)" stroke-width="1" opacity=".55" />
+            <text x="${padL + plotW + 6}" y="${(gy + 3.5).toFixed(1)}"
+                  fill="var(--dim)" font-size="10" font-family="monospace">${priceLabel(v)}</text>`;
+  }).join('');
+
+  const first = candles[0], last = candles[candles.length - 1];
+  const move = first.o ? ((last.c - first.o) / first.o) * 100 : 0;
+  const when = (t) => new Date(t * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  box.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="260" role="img"
+         aria-label="price candles over the last ${escape(data.span)}">
+      ${guides}${bars}
+    </svg>
+    <div class="chartfoot">
+      <span>${escape(when(first.t))} → ${escape(when(last.t))}</span>
+      <span>${candles.length} candles · ${escape(data.span)} · ${pct(move)}</span>
+    </div>
+    ${data.stale ? `<p class="note warn">${escape(data.note)}</p>` : ''}`;
+}
+
+function renderTfButtons() {
+  $('tfRow').innerHTML = ['5m', '1h', '4h', '1d']
+    .map((tf) => `<button class="tf${tf === chartTf ? ' on' : ''}" data-tf="${tf}">${tf}</button>`)
+    .join('');
+  $('tfRow').querySelectorAll('[data-tf]').forEach((b) =>
+    b.addEventListener('click', () => {
+      chartTf = b.dataset.tf;
+      renderTfButtons();
+      loadChart();
+    })
+  );
+}
+
+async function loadChart() {
+  if (!chartPair) return;
+  $('chartBox').innerHTML = '<p class="empty">loading candles…</p>';
+  const pair = chartPair;
+  try {
+    const { candles } = await api(`/api/token/${encodeURIComponent(pair)}/candles?tf=${chartTf}`);
+    if (pair === chartPair) renderChart(candles);
+  } catch (e) {
+    if (pair === chartPair) $('chartBox').innerHTML = `<p class="empty bad">${escape(e.message)}</p>`;
+  }
+}
 
 async function refreshHistory() {
   const { trades } = await api('/api/history');

@@ -19,6 +19,32 @@ and every fill is written to a per-client audit ledger.
   concurrency. One client's failure does not abort the others.
 - **Ledger** — append-only SQLite. What was decided, what each client got and why,
   what filled, what it cost.
+- **Token preview** — paste a mint and get its market cap, price, liquidity, 24h
+  volume and price changes, plus a candlestick chart at 5m/1h/4h/1d. Works both
+  while a token is still on the bonding curve and after it graduates.
+- **Phantom wallets** — link an account by public key, with no secret key on this
+  machine at all.
+
+## Account custody
+
+Three kinds of account, and the difference decides what the allocator may do:
+
+| Custody | Key lives | In block trades | Signing |
+|---|---|---|---|
+| `keystore` | encrypted on this machine | yes | server signs unattended |
+| `phantom` | in the client's Phantom | yes | you approve each leg in the browser |
+| `watch` | nowhere here | never | not traded, only tracked |
+
+A Phantom account cannot be traded unattended — that is the point of it, not a
+limitation to work around. Phantom signs interactively, so each block trade pauses
+on its leg and waits for a human approval. The ledger records the leg as *awaiting
+approval* until the browser reports back, so a leg nobody approved is never written
+down as filled. If you want a client's orders to fill without someone clicking, that
+client's key has to be in the keystore, and you should be certain your mandate
+actually covers holding it.
+
+Watch-only accounts are for reporting: balances and positions show in the dashboard,
+and the allocator skips them with a stated reason on every trade.
 
 ## Install
 
@@ -52,11 +78,17 @@ cd pumpfun-allocator && npm ci && cp .env.example .env
 Set at minimum `RPC_URL` in `.env` (use a private RPC — the public endpoint will
 drop fills) and `MAX_BLOCK_TRADE_SOL`.
 
-Add a client account:
+Add a client account whose key you hold:
 
 ```bash
 npm run wallet -- add
 ```
+
+Or link a wallet with no key on this machine: click **Connect Phantom** in the
+dashboard, choose *Signs in browser* or *Watch only*, and approve the signature
+request. That request proves control of the wallet — it authorizes no transfer and
+moves no funds. The challenge is single-use, so a captured signature cannot be
+replayed to register the wallet somewhere else.
 
 Run the dashboard:
 
@@ -75,6 +107,20 @@ behind a proxy that actually authenticates.
    would get and why, including who is skipped and for what reason.
 3. **Execute** — re-plans against live balances (it does not trust the previewed plan),
    then signs per account.
+
+## Market data
+
+Two free, key-less sources, both display-only — nothing in the trading path reads
+them, so an outage degrades the preview and does not affect execution:
+
+- **DexScreener** for price, market cap, liquidity, volume and the pair address.
+- **GeckoTerminal** for OHLCV candles, drawn as an inline SVG chart.
+
+The chart is drawn here rather than embedded from DexScreener: their embed iframe
+depends on a socket session that often never resolves when framed, which leaves a
+permanent "Loading pair" box. Fetching the candles means the panel either shows real
+data or says plainly that it could not get any. GeckoTerminal's free tier is rate
+limited, so cached candles are served with a note when the limit is hit.
 
 ## What this deliberately does not do
 

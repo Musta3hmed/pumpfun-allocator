@@ -33,6 +33,10 @@ export function sizeOrders({ side, positions, basis = 'pro-rata', minSol = 0, ma
     const pct = Number(sellPct);
     if (!(pct > 0 && pct <= 100)) throw new Error('sellPct must be in (0, 100]');
     for (const p of positions) {
+      if ((p.account.custody || 'keystore') === 'watch') {
+        skipped.push({ ...summarize(p), reason: 'watch-only account — tracked, never traded' });
+        continue;
+      }
       if (p.tokens <= 0) {
         skipped.push({ ...summarize(p), reason: 'holds no position in this mint' });
         continue;
@@ -49,7 +53,13 @@ export function sizeOrders({ side, positions, basis = 'pro-rata', minSol = 0, ma
         reason: `${pct}% of a ${round(p.tokens)} token position`,
       });
     }
-    return { basis: `${pct}% of position`, orders, skipped, totalSol: 0 };
+    return {
+      basis: `${pct}% of position`,
+      orders,
+      skipped,
+      totalSol: 0,
+      phantomLegs: orders.filter((o) => o.custody === 'phantom').length,
+    };
   }
 
   const lo = Number(minSol);
@@ -63,6 +73,10 @@ export function sizeOrders({ side, positions, basis = 'pro-rata', minSol = 0, ma
   const spread = highBal - lowBal;
 
   for (const [i, p] of positions.entries()) {
+    if ((p.account.custody || 'keystore') === 'watch') {
+      skipped.push({ ...summarize(p), reason: 'watch-only account — tracked, never traded' });
+      continue;
+    }
     const free = investable[i];
     const mandateCap = p.account.mandate.maxPerTradeSol;
 
@@ -114,7 +128,7 @@ export function sizeOrders({ side, positions, basis = 'pro-rata', minSol = 0, ma
     );
   }
 
-  return { basis, orders, skipped, totalSol };
+  return { basis, orders, skipped, totalSol, phantomLegs: orders.filter((o) => o.custody === 'phantom').length };
 }
 
 /** Read live balances for the enabled accounts, then size the block trade. */
@@ -141,6 +155,7 @@ function summarize(p) {
     accountId: p.account.id,
     label: p.account.label,
     pubkey: p.account.pubkey,
+    custody: p.account.custody || 'keystore',
     clientName: p.account.mandate.clientName,
     agreementRef: p.account.mandate.agreementRef,
     solBalance: round(p.sol, 4),

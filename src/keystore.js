@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { Keypair } from '@solana/web3.js';
+import { Keypair, PublicKey } from '@solana/web3.js';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import bs58 from 'bs58';
 import { config } from './config.js';
 
@@ -67,6 +68,8 @@ export function listAccounts() {
     id: a.id,
     label: a.label,
     pubkey: a.pubkey,
+    // Accounts written before custody existed are keystore-signed by definition.
+    custody: a.custody || 'keystore',
     enabled: a.enabled !== false,
     mandate: a.mandate,
     addedAt: a.addedAt,
@@ -78,17 +81,13 @@ export function getAccount(id) {
 }
 
 /**
- * Add a client account.
- *
- * `mandate` records the authorization under which you are permitted to trade this
- * person's money — who they are, what they signed, its date, and the ceiling they
- * agreed to. It is required, and the allocator refuses to size an order above
- * `mandate.maxPerTradeSol`. This is the discretionary-authority record; if you
- * cannot fill it in truthfully for an account, you should not be trading it.
+ * A mandate records the authorization under which you are permitted to trade a
+ * client's money — who they are, what they signed, its date, and the ceiling they
+ * agreed to. It is required for every account, and the allocator refuses to size
+ * an order above `maxPerTradeSol`. This is the discretionary-authority record; if
+ * you cannot fill it in truthfully for an account, you should not be trading it.
  */
-export function addAccount({ label, secretKeyBase58, mandate, passphrase }) {
-  if (!label) throw new Error('label is required');
-  if (!passphrase) throw new Error('keystore passphrase is required');
+function validateMandate(mandate) {
   if (!mandate?.clientName || !mandate?.agreementRef || !mandate?.signedAt) {
     throw new Error('mandate requires clientName, agreementRef and signedAt');
   }
@@ -96,6 +95,19 @@ export function addAccount({ label, secretKeyBase58, mandate, passphrase }) {
   if (!Number.isFinite(maxPerTradeSol) || maxPerTradeSol <= 0) {
     throw new Error('mandate.maxPerTradeSol must be a positive number of SOL');
   }
+  return {
+    clientName: mandate.clientName,
+    agreementRef: mandate.agreementRef,
+    signedAt: mandate.signedAt,
+    maxPerTradeSol,
+  };
+}
+
+/** Add a client account whose secret key this machine holds, sealed at rest. */
+export function addAccount({ label, secretKeyBase58, mandate, passphrase }) {
+  if (!label) throw new Error('label is required');
+  if (!passphrase) throw new Error('keystore passphrase is required');
+  const checkedMandate = validateMandate(mandate);
 
   const secret = bs58.decode(secretKeyBase58);
   const kp = Keypair.fromSecretKey(secret);
@@ -110,21 +122,86 @@ export function addAccount({ label, secretKeyBase58, mandate, passphrase }) {
     id: crypto.randomUUID(),
     label,
     pubkey,
+    custody: 'keystore',
     enabled: true,
     addedAt: new Date().toISOString(),
-    mandate: {
-      clientName: mandate.clientName,
-      agreementRef: mandate.agreementRef,
-      signedAt: mandate.signedAt,
-      maxPerTradeSol,
-    },
+    mandate: checkedMandate,
     sealed: seal(Buffer.from(secret), passphrase),
   };
   store.accounts.push(record);
   writeStore(store);
 
   secret.fill(0);
-  return { id: record.id, label, pubkey, mandate: record.mandate };
+  return { id: record.id, label, pubkey, custody: 'keystore', mandate: record.mandate };
+}
+
+/**
+ * Register an account by public key alone, with no secret key on this machine.
+ *
+ *   custody 'phantom' — a wallet you can sign with in the browser. It joins block
+ *                       trades, but its leg needs a Phantom approval per trade,
+ *                       so the run pauses on it rather than signing unattended.
+ *   custody 'watch'   — tracked for balances and reporting only. Never traded.
+ *
+ * `signature` must be an ed25519 signature of `message` by `pubkey`, proving the
+ * connecting browser actually controls the key rather than just typing an address.
+ */
+export function addExternalAccount({ label, pubkey, custody, mandate, message, signature }) {
+  if (!label) throw new Error('label is required');
+  if (custody !== 'phantom' && custody !== 'watch') {
+    throw new Error("custody must be 'phantom' or 'watch'");
+  }
+
+  let key;
+  try {
+    key = new PublicKey(pubkey);
+  } catch {
+    throw new Error('not a valid Solana public key');
+  }
+  const pubkeyBase58 = key.toBase58();
+
+  if (!verifyOwnership({ pubkey: pubkeyBase58, message, signature })) {
+    throw new Error('ownership proof failed: the signature does not match this public key');
+  }
+
+  // A watch-only account is never sized, so it carries a nominal ceiling.
+  const checkedMandate = validateMandate(
+    custody === 'watch' ? { ...mandate, maxPerTradeSol: mandate?.maxPerTradeSol || 0.000001 } : mandate
+  );
+
+  const store = readStore();
+  if (store.accounts.some((a) => a.pubkey === pubkeyBase58)) {
+    throw new Error(`account ${pubkeyBase58} is already registered`);
+  }
+
+  const record = {
+    id: crypto.randomUUID(),
+    label,
+    pubkey: pubkeyBase58,
+    custody,
+    enabled: true,
+    addedAt: new Date().toISOString(),
+    mandate: checkedMandate,
+    ownershipProof: { message, signature, verifiedAt: new Date().toISOString() },
+  };
+  store.accounts.push(record);
+  writeStore(store);
+
+  return { id: record.id, label, pubkey: pubkeyBase58, custody, mandate: checkedMandate };
+}
+
+/** Verify an ed25519 signature over a UTF-8 message by a base58 Solana pubkey. */
+export function verifyOwnership({ pubkey, message, signature }) {
+  if (!message || !signature) return false;
+  try {
+    return ed25519.verify(
+      bs58.decode(signature),
+      new TextEncoder().encode(message),
+      new PublicKey(pubkey).toBytes()
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function setEnabled(id, enabled) {
@@ -153,6 +230,11 @@ export async function withKeypair(id, passphrase, fn) {
   const store = readStore();
   const acct = store.accounts.find((a) => a.id === id);
   if (!acct) throw new Error(`no such account: ${id}`);
+  if ((acct.custody || 'keystore') !== 'keystore') {
+    throw new Error(
+      `${acct.label} is a ${acct.custody} account — this machine holds no key for it and cannot sign on its behalf`
+    );
+  }
   let secret;
   try {
     secret = open(acct.sealed, passphrase);
@@ -170,9 +252,10 @@ export async function withKeypair(id, passphrase, fn) {
 /** Cheap check that the passphrase opens the store, before starting a trade run. */
 export function verifyPassphrase(passphrase) {
   const store = readStore();
-  if (store.accounts.length === 0) return true;
+  const sealed = store.accounts.find((a) => a.sealed);
+  if (!sealed) return true; // nothing encrypted yet, or all accounts are external
   try {
-    open(store.accounts[0].sealed, passphrase).fill(0);
+    open(sealed.sealed, passphrase).fill(0);
     return true;
   } catch {
     return false;
