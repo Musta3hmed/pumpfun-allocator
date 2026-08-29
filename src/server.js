@@ -107,17 +107,29 @@ app.post('/api/legs/:id/settle', wrap(async (req, res) => {
   ok(res, { leg: await settlePhantomLeg(req.params.id, { signature, error }) });
 }));
 
+/**
+ * The account list itself, straight from the keystore — no network, always instant.
+ *
+ * Balances are a separate call on purpose. Folding them in here meant the whole
+ * panel sat on "loading" whenever the RPC was slow, which on the public endpoint
+ * is often. The list is local data and should never wait on a remote one.
+ */
 app.get('/api/accounts', wrap(async (_req, res) => {
-  const accounts = await Promise.all(
+  ok(res, { accounts: listAccounts() });
+}));
+
+/** Balances, fetched in parallel and individually bounded. Never throws as a whole. */
+app.get('/api/accounts/balances', wrap(async (_req, res) => {
+  const balances = await Promise.all(
     listAccounts().map(async (a) => {
       try {
-        return { ...a, solBalance: await solBalance(a.pubkey) };
+        return { id: a.id, solBalance: await solBalance(a.pubkey) };
       } catch (e) {
-        return { ...a, solBalance: null, balanceError: String(e?.message || e) };
+        return { id: a.id, solBalance: null, balanceError: String(e?.message || e) };
       }
     })
   );
-  ok(res, { accounts });
+  ok(res, { balances });
 }));
 
 app.post('/api/accounts', wrap(async (req, res) => {

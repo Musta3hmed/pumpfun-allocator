@@ -69,17 +69,42 @@ export async function confirm(signature) {
   return signature;
 }
 
-export async function solBalance(pubkey) {
-  const lamports = await connection.getBalance(new PublicKey(pubkey), 'confirmed');
+/**
+ * Bound an RPC call in wall-clock time.
+ *
+ * web3.js retries internally with backoff, so a rate-limited public endpoint can
+ * leave a request outstanding for a very long time. Anything the dashboard waits
+ * on needs a ceiling, or a slow RPC turns into a panel that says "loading" forever.
+ */
+export function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+export async function solBalance(pubkey, timeoutMs = 8000) {
+  const lamports = await withTimeout(
+    connection.getBalance(new PublicKey(pubkey), 'confirmed'),
+    timeoutMs,
+    `balance lookup for ${pubkey.slice(0, 8)}…`
+  );
   return lamports / LAMPORTS_PER_SOL;
 }
 
 /** UI-denominated token balance for `mint` held by `pubkey`, 0 if no account. */
-export async function tokenBalance(pubkey, mint) {
-  const resp = await connection.getParsedTokenAccountsByOwner(
-    new PublicKey(pubkey),
-    { mint: new PublicKey(mint) },
-    'confirmed'
+export async function tokenBalance(pubkey, mint, timeoutMs = 10000) {
+  const resp = await withTimeout(
+    connection.getParsedTokenAccountsByOwner(
+      new PublicKey(pubkey),
+      { mint: new PublicKey(mint) },
+      'confirmed'
+    ),
+    timeoutMs,
+    `token balance lookup for ${pubkey.slice(0, 8)}…`
   );
   return resp.value.reduce(
     (sum, { account }) => sum + (account.data.parsed.info.tokenAmount.uiAmount || 0),

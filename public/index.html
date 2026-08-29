@@ -287,7 +287,13 @@ async function loadConfig() {
 }
 
 async function loadAccounts() {
-  const { accounts } = await api('/api/accounts');
+  let accounts;
+  try {
+    accounts = (await api('/api/accounts')).accounts;
+  } catch (e) {
+    $('accounts').innerHTML = `<p class="empty bad">${escape(e.message)}</p>`;
+    return;
+  }
   if (!accounts.length) {
     $('accounts').innerHTML = '<p class="empty">No accounts in the keystore.</p>';
     return;
@@ -302,7 +308,7 @@ async function loadAccounts() {
           ${escape(a.mandate.clientName)} · ${escape(a.mandate.agreementRef)}${a.custody === 'watch' ? '' : ` · cap ${a.mandate.maxPerTradeSol} SOL`}
         </div>
       </td>
-      <td class="num">${a.balanceError ? '<span class="bad">rpc err</span>' : fmt(a.solBalance)}</td>
+      <td class="num" id="bal-${escape(a.id)}"><span class="reason">·</span></td>
       <td><span class="pill ${a.enabled ? 'on' : 'off'}">${a.enabled ? 'active' : 'paused'}</span></td>
       <td><button data-toggle="${a.id}" data-next="${!a.enabled}">${a.enabled ? 'Pause' : 'Resume'}</button></td>
     </tr>`).join('');
@@ -320,6 +326,29 @@ async function loadAccounts() {
       loadAccounts();
     })
   );
+
+  loadBalances();
+}
+
+/**
+ * Balances arrive separately so a slow RPC cannot hold up the account list.
+ * Each cell fills in on its own; a failure marks that one row, not the panel.
+ */
+async function loadBalances() {
+  try {
+    const { balances } = await api('/api/accounts/balances');
+    for (const b of balances) {
+      const cell = $(`bal-${b.id}`);
+      if (!cell) continue;
+      cell.innerHTML = b.balanceError
+        ? `<span class="bad" title="${escape(b.balanceError)}">rpc err</span>`
+        : fmt(b.solBalance);
+    }
+  } catch (e) {
+    document.querySelectorAll('[id^="bal-"]').forEach((c) => {
+      c.innerHTML = `<span class="bad" title="${escape(e.message)}">rpc err</span>`;
+    });
+  }
 }
 
 function renderPlan(plan) {
@@ -549,11 +578,15 @@ $('connectBtn').addEventListener('click', async () => {
   try {
     const custody = $('connectAs').value;
     const provider = phantom();
+
+    setStatus('Waiting for Phantom — check for its popup, and open the extension if you do not see one.');
     const { publicKey } = await provider.connect();
     const pubkey = publicKey.toString();
 
+    setStatus('Connected. Waiting for you to sign the ownership message in Phantom…');
     const { message, nonce } = await api('/api/wallet/nonce', { method: 'POST', body: '{}' });
     const signed = await provider.signMessage(new TextEncoder().encode(message), 'utf8');
+    setStatus('');
 
     pendingLink = { pubkey, custody, message, nonce, signature: bs58encode(signed.signature) };
     $('linkPubkey').textContent = pubkey;

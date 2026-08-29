@@ -53,7 +53,7 @@ async function loadStatus() {
     $('rpc').title = cfg.rpcUrl;
     $('ceiling').textContent = `${cfg.maxBlockTradeSol} SOL / trade`;
 
-    const { accounts } = await api('/api/accounts', 15000);
+    const { accounts } = await api('/api/accounts');
     if (accounts.length === 0) {
       $('accounts').textContent = 'none yet';
       $('sol').textContent = '—';
@@ -65,11 +65,18 @@ async function loadStatus() {
     }, {});
     $('accounts').textContent = Object.entries(byCustody).map(([k, v]) => `${v} ${k}`).join(', ');
 
-    const known = accounts.filter((a) => typeof a.solBalance === 'number');
-    const total = known.reduce((s, a) => s + a.solBalance, 0);
-    $('sol').textContent = known.length === accounts.length
-      ? `${total.toFixed(4)} SOL`
-      : `${total.toFixed(4)} SOL (${accounts.length - known.length} unread)`;
+    // Balances are a separate, slower call; the panel above is already populated.
+    $('sol').textContent = 'reading…';
+    try {
+      const { balances } = await api('/api/accounts/balances', 20000);
+      const known = balances.filter((b) => typeof b.solBalance === 'number');
+      const total = known.reduce((s, b) => s + b.solBalance, 0);
+      $('sol').textContent = known.length === balances.length
+        ? `${total.toFixed(4)} SOL`
+        : `${total.toFixed(4)} SOL (${balances.length - known.length} unread)`;
+    } catch {
+      $('sol').textContent = 'rpc unavailable';
+    }
   } catch {
     $('dot').className = 'dot down';
     $('offline').hidden = false;
