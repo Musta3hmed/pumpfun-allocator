@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Block Trade Allocator</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>Block Trade Allocator</h1>
+    <span id="dot" class="dot" title="server status"></span>
+  </header>
+
+  <div id="offline" class="panel warn" hidden>
+    <p class="t">The allocator server is not running.</p>
+    <p class="s">Start it, then reopen this popup:</p>
+    <code id="startCmd">cd "%USERPROFILE%\pumpfun-allocator"; npm start</code>
+    <button id="copyCmd" class="ghost">Copy command</button>
+  </div>
+
+  <div id="online" hidden>
+    <div class="panel">
+      <div class="row"><span class="k">RPC</span><span class="v" id="rpc">—</span></div>
+      <div class="row"><span class="k">Ceiling</span><span class="v" id="ceiling">—</span></div>
+      <div class="row"><span class="k">Accounts</span><span class="v" id="accounts">—</span></div>
+      <div class="row"><span class="k">Tracked SOL</span><span class="v" id="sol">—</span></div>
+    </div>
+
+    <div class="panel">
+      <label for="mint">Token lookup</label>
+      <input id="mint" placeholder="paste a mint address" spellcheck="false" autocomplete="off" />
+      <div id="token"></div>
+    </div>
+  </div>
+
+  <button id="open" class="primary">Open dashboard</button>
+  <p class="foot">
+    Linking Phantom and placing trades happen in the dashboard tab — a browser
+    extension popup cannot talk to another extension's wallet.
+  </p>
+
+  <script src="popup.js"></script>
+</body>
+</html>

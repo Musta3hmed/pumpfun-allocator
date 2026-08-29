@@ -108,6 +108,41 @@ behind a proxy that actually authenticates.
 3. **Execute** — re-plans against live balances (it does not trust the previewed plan),
    then signs per account.
 
+## Chrome extension
+
+`extension/` is an unpacked MV3 extension: a toolbar popup showing server status,
+an account summary by custody, total tracked SOL, and a token lookup with market
+cap, price, liquidity, 24h change and a sparkline.
+
+Install it:
+
+1. Open `chrome://extensions`
+2. Turn on **Developer mode** (top right)
+3. **Load unpacked** → select the `extension` folder
+4. Pin it from the puzzle-piece menu
+
+### What the extension is and is not
+
+It is a control panel, not the program. The allocator is a Node process — scrypt
+key derivation, AES-GCM decryption, transaction building, the SQLite ledger, RPC
+calls — and none of that can run inside a Chrome extension. The popup talks to the
+local server over `host_permissions` and hands off to the dashboard tab for
+anything that signs.
+
+Phantom is the second reason for that split, and the more important one: a wallet
+extension injects `window.solana` into ordinary web pages, **not** into another
+extension's popup. Putting the dashboard inside the extension would break Phantom
+linking outright. The popup therefore opens the dashboard as a normal page, which
+is where Phantom works.
+
+The popup is read-only by design. It shows status and looks up tokens; it cannot
+place, size, or approve a trade. Everything that moves money stays on the dashboard
+behind the preview-then-execute flow.
+
+Note the server deliberately sends no CORS headers. The extension reaches it
+through `host_permissions`, which bypasses CORS for the granted host without
+opening the API to web pages or to other installed extensions.
+
 ## Market data
 
 Two free, key-less sources, both display-only — nothing in the trading path reads
