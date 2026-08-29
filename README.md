@@ -33,7 +33,7 @@ That fetches the repo into `%USERPROFILE%\pumpfun-allocator`, installs dependenc
 creates your `.env`, and runs the test suite. Re-running it updates an existing
 install in place and leaves your `.env`, keystore, and ledger untouched.
 
-Options: `-Path D:	rading` to install elsewhere, `-Start` to launch the dashboard
+Options: `-Path D:\trading` to install elsewhere, `-Start` to launch the dashboard
 when it finishes, `-SkipTests` to skip verification.
 
 Requires Node.js 24 or newer (the ledger uses the built-in `node:sqlite` module).
